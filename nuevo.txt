@@ -1,0 +1,351 @@
+sudo nano /etc/netplan/01-network-manager-all.yaml
+
+Estructura del servidor:
+
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    ens18:
+      dhcp4: true
+    ens19:
+      addresses: [193.168.5.220/24]
+      nameservers:
+        search: [micentro.edu]
+        addresses: [193.168.5.220, 8.8.8.8]
+
+
+Estructura del cliente:
+
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    ens18:
+     dhcp4: false
+    addresses: [193.168.5.3/24]
+    routes:
+      - to: default
+        via: 193.168.5.220
+    nameservers:
+      addresses: [193.168.5.220, 8.8.8.8]
+
+- sudo netplan generate
+- sudo netplan apply
+- sudo apt-get install openvswitch-switch (si da problema el servicio ovsdb-server)
+- sudo systemctl start ovsdb-server (iniciar servicio para hacer el apply)
+- sudo apt-get update; sudo apt-get upgrade -y
+- sudo apt-get install iptables
+- nano enruta.sh
+#!/bin/bash
+echo "1" > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A POSTROUTING -s 193.168.5.0/24 -o ens18 -j MASQUERADE
+iptables -A FORWARD -j ACCEPT
+
+- chmod 744 enruta.sh
+
+Si no funciona la script:
+- cat /proc/sys/net/ipv4/ip_forward
+- sudo nano /etc/sysctl.conf
+- Descomentar net.ipv4.ip_forward=1
+- sudo sysctl -p /etc/sysctl.conf
+
+- sudo bash enruta.sh
+- ping 8.8.8.8 (en el cliente, debe funcionar)
+- sudo apt-get update; sudo apt-get upgrade -y
+- sudo apt-get install iptables-persistent (en el servidor)
+- mkdir /home/usuario/services
+- cd /home/usuario/services
+- nano enruta.service
+[Unit]
+Description=Script service
+After=network.target network-online.target
+Wants=network-online.target
+[Service]
+ExecStart=/home/usuario/enruta.sh
+[Install]
+WantedBy=multi-user.target
+
+-  chmod 744 enruta.service
+- sudo systemctl enable /home/usuario/services/enruta.service
+- systemctl daemon-reload
+- sudo systemctl start enruta.service
+- sudo systemctl status enruta.service (debe salir loaded)
+DHCP (SOR - SERRE)
+
+- sudo apt-get update; sudo apt-get install isc-dhcp-server (en el servidor)
+- sudo nano /etc/dhcp/dhcpd.conf (introducir al final del archivo):
+
+group SMR {
+subnet 193.168.5.0 netmask 255.255.255.0 {
+range 193.168.5.100 193.168.5.200;
+option domain-name-servers 193.168.5.220;
+option domain-name "micentro.edu";
+option subnet-mask 255.255.255.0;
+option routers 193.168.5.220;
+option broadcast-address 193.168.5.255;
+}
+}
+
+
+- sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+
+- sudo nano /etc/default/isc-dhcp-server (añadir en el archivo):
+	INTERFACESv4=”ens19”
+
+- sudo service isc-dhcp-server restart
+- sudo service isc-dhcp-server status  
+
+- sudo nano /etc/netplan/01-network-manager-all.yaml  (cliente)
+dhcp4: true
+
+- sudo netplan generate
+- sudo netplan apply
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Configurar una ip fija:
+- hostname	(cliente - Te da el nombre)
+- sudo nano /etc/dhcp/dhcpd.conf
+group SMR {
+subnet 193.168.5.0 netmask 255.255.255.0 {
+range 193.168.5.100 193.168.5.200;
+option domain-name-servers 193.168.5.220;
+option domain-name "micentro.edu";
+option subnet-mask 255.255.255.0;
+option routers 193.168.5.220;
+option broadcast-address 193.168.5.255;
+}
+host cliente {
+hardware ethernet c6:e3:69:f1:e4:b9;
+fixed-address 193.168.5.105;
+}
+}
+
+
+- sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+- sudo service isc-dhcp-server restart
+- sudo service isc-dhcp-server status
+
+
+
+ DNS (SOR - SERRE)
+- sudo apt update
+- sudo apt install bind9 bind9-utils
+- sudo ufw allow bind9
+- sudo nano /etc/bind/named.conf.options
+listen-on { any; };
+allow-query { localhost; 193.168.5.0/24; };
+forwarders {
+8.8.8.8;
+};
+
+
+	dnssec-validation no;
+	
+	 #listen-on-v6 { any; };
+
+
+- sudo nano /etc/default/named
+	OPTIONS="-u bind -4"
+
+- sudo named-checkconf
+- sudo systemctl restart bind9
+- sudo systemctl status bind9
+- sudo nano /etc/bind/named.conf.local
+zone "micentro.edu" IN {
+type master;
+file "/etc/bind/zonas/db.micentro.edu";
+};
+
+zone "5.168.193.in-addr.arpa" {
+type master;
+file "/etc/bind/zonas/db.5.168.193";
+};
+
+- sudo mkdir /etc/bind/zonas
+- sudo cp /etc/bind/db.local /etc/bind/zonas/db.micentro.edu
+
+
+
+
+
+
+
+
+
+
+- sudo nano /etc/bind/zonas/db.micentro.edu
+;
+; BIND data file for local loopback interface
+;
+$TTL		604800
+@		IN	SOA	servidor.micentro.edu.	root.micentro.edu. (
+2		; Serial
+604800	; Refresh
+86400		; Retry
+2419200	; Expire
+604800 )	; Negative Cache TTL
+;
+IN	NS		servidor.micentro.edu.
+servidor	IN	A		193.168.5.220
+pc01		IN	A		193.168.5.105
+server		IN	CNAME	servidor
+
+
+- sudo cp /etc/bind/zonas/db.micentro.edu /etc/bind/zonas/db.5.168.193
+- sudo nano /etc/bind/zonas/db.5.168.193 
+;
+; BIND data file for local loopback interface
+;
+$TTL	604800
+@	IN	SOA	servidor.micentro.edu.	root.micentro.edu. (
+2		; Serial
+604800	; Refresh
+86400		; Retry
+2419200	; Expire
+604800 )	; Negative Cache TTL
+;
+IN	NS		servidor.micentro.edu.
+220	IN	PTR		servidor.micentro.edu.
+
+
+- sudo named-checkconf /etc/bind/named.conf.local
+- sudo named-checkzone micentro.edu /etc/bind/zonas/db.micentro.edu
+- sudo named-checkzone 5.168.193.in-addr.arpa /etc/bind/zonas/db.5.168.193
+- sudo systemctl restart bind9
+- sudo systemctl status bind9
+
+
+- sudo nano /etc/resolv.conf (servidor)
+nameserver 193.168.5.220
+nameserver 127.0.0.53
+options edns0 trust-ad
+search micentro.edu
+
+- sudo nano /etc/resolv.conf (cliente)
+nameserver 127.0.0.53
+options edns0 trust-ad
+search micentro.edu
+
+Pruebas en el servidor:
+host pc01
+ping pc01
+ping pc01.micentro.edu
+host servidor
+host server
+host 193.168.5.220
+
+Pruebas en el cliente:
+ping servidor.micentro.edu
+ping pc01
+host pc01
+host servidor
+host servidor.micentro.edu
+host pc01.micentro.edu
+host server
+
+- cp /etc/resolv.conf /etc/resolv.conf.bak
+- chattr +i /etc/resolv.conf.bak
+- rm /etc/resolv.conf
+- cp /etc/resolv.conf.bak /etc/resolv.conf
+- sudo apt install proftpd
+- sudo adduser usuario
+- sudo nano /etc/proftpd/proftpd.conf
+DefaultRoot /torresFTP
+
+<Anonymous ~ftp> (añadir carpeta para ftp)
+(Descomentar todo)
+ </Anonymous>
+
+- mkdir torresFTP
+- chmod 777 /torresFTP
+- sudo systemctl restart proftpd
+- ftp IP
+- addgroup grupoftp
+- adduser ftp
+
+
+
+
+
+
+
+    4  sudo apt install proftpd
+    5  add user usuario
+    6  adduser usuario
+    7  sudo adduser alejandrot
+    8  sudo nano /etc/proftpd/proftpd.conf 
+    9  fg
+   10  sudo nano /etc/proftpd/proftpd.conf 
+   11  ip a
+   12  ftp 172.22.227.128
+   13  sudo apt install apach2
+   14  sudo apt install apache2
+   15  cd /var/www/html
+   16  ls
+   17  sudo rm -r index.html 
+   18  cp /home/usuario/Escritorio/web-principal/segunda.html principal.html
+   19  sudo cp /home/usuario/Escritorio/web-principal/segunda.html principal.html
+   20  ls
+   21  sudo cp /home/usuario/Escritorio/web-principal/atormun.jpg atormun.jpg
+   22  ls
+   23  sudo cp /home/usuario/Escritorio/host-virtual/ host-virtual/
+   24  ls
+   25  sudo cp /home/usuario/Escritorio/host-virtual/ ./host-virtual/
+   26  sudo cp -r /home/usuario/Escritorio/host-virtual/ host-virtual/
+   27  ls
+   28  cd host-virtual/
+   29  ls
+   30  mv tercera.html host.html
+   31  sudo mv tercera.html host.html
+   32  ls
+   33  cd ..
+   34  cd
+   35  pwd
+   36  mkdir public_html
+   37  ls
+   38  cd public_html/
+   39  cp /home/usuario/Escritorio/web-usuario/primera.html usuario.html
+   40  cp /home/usuario/Escritorio/web-usuario/atormun.jpg atormun.jpg
+41  cd
+   42  ip a
+   43  cd /var/www/html
+   44  ls
+   45  sudo nano principal.html 
+   46  cd host-virtual/
+   47  ls
+   48  sudo nano host.html 
+   50  cd 
+   51  clear
+   52  sudo a2enmod ssl
+   53  sudo systemctl restart apache2
+   54  sudo a2enmod userdir
+   55  sudo systemctl restart apache2
+   56  sudo nano /etc/apache2/mods-enabled/alias.conf 
+   57  sudo systemctl restart apache2
+   58  ip a
+   59  sudo nano /etc/apache2/mods-enabled/alias.conf 
+   60  sudo visudo
+   61  sudo systemctl restart apache2
+   62  sudo nano /etc/apache2/mods-enabled/alias.conf 
+   63  sudo systemctl restart apache2
+   64  sudo nano /etc/apache2/mods-enabled/alias.conf 
+   65  sudo apt install ssh
+
+
+
