@@ -1,0 +1,150 @@
+Estructura en el servidor:
+
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+   ens18:
+    dhcp4: true
+   ens19:
+    addresses: [193.168.4.220/24]
+    nameservers:
+     addresses: [1.1.1.1, 8.8.8.8]
+
+Estructura en el cliente:
+
+network:
+ version: 2
+ renderer: networkd
+ ethernets:
+  ens18:
+   dhcp4: false
+   addresses: [193.168.4.3/24]
+   routes:
+    - to: default
+      via: 193.168.4.220
+   nameservers:
+     addresses: [1.1.1.1, 8.8.8.8]
+mkdir /home/usuario/scritps
+- nano enruta.sh:
+	#!/bin/bash
+	echo “1” > /proc/sys/net/ipv4/ip_forward
+	iptables -t nat -A POSTROUTING -s 193.168.4.0/24 -o ens18 -j MASQUERADE
+	iptables -A FORWARD -j ACCEPT
+- bash enruta.sh
+- ping 8.8.8.8 (en el cliente, debe funcionar)
+- sudo apt-get update; sudo apt-get upgrade -y
+- sudo apt-get update; sudo apt-get install iptables-persistent (en el servidor)
+- mkdir /home/usuario/services
+- nano enruta.service:
+
+	#!/bin/bash
+[Unit]
+Description=Script service
+After=network.target network-online.target
+Wants=network-online.target
+	
+[Service]
+ExecStart=/home/usuario/scripts/enruta.sh
+	
+[Install]
+WantedBy=multi-user.target
+- sudo systemctl enable /home/usuario/services/enruta.service
+- sudo systemctl start enruta.service 
+- sudo systemctl status enruta.service (debe salir loaded)
+- sudo apt-get update; sudo apt-get install isc-dhcp-server (en el servidor)
+- sudo nano etc/dhcp/dhcpd.conf (introducir al final del archivo):
+
+	group SMR {
+	subnet 193.168.4.0 netmask 255.255.255.0 {
+	range 193.168.4.100 193.168.4.200;
+	option domain-name-servers 193.168.4.220;
+	option domain-name “micentro.edu”;
+	option subnet-mask 255.255.255.0;
+	option routers 193.168.4.220;
+	option broadcast-address 193.168.4.255;
+	}
+	}
+
+- sudo dhcpd -t -cf /etc/dhcp/dhcpd.conf
+- sudo nano /etc/default/isc-dhcp-server (añadir en el archivo):
+
+	INTERFACESv4=”ens19”
+
+- sudo nano /etc/netplan/01-network-manager-all.yaml:
+	network:
+ version: 2
+ renderer: networkd
+ ethernets:
+  ens18:
+   dhcp4: true
+   #addresses: [193.168.4.3/24]
+   #routes:
+    #- to: default
+     # via: 193.168.4.220
+   #nameservers:
+    # addresses: [1.1.1.1, 8.8.8.8]
+
+
+sudo hostnametcl set-hostname ldapserver.micentro.edu
+sudo nano /etc/hosts
+127.0.0.1 ldapserver.micentro.edu
+193.168.4.220 ldapd.server.micentro.edu
+sudo apt update -y; sudo apt upgrade -y; sudo apt dist-upgrade -y (y en el cliente)
+sudo apt install slapd ldap-utils -y
+sudo dpkg-reconfigure slapd
+sudo nano ou.ldif
+dn: ou=informatica,dc=micentro,dc=edu
+objectClass: top
+objectClass: organizationalUnit
+ou: informatica
+sudo ldapadd -x -D cn=admin,dc=micentro,dc=edu -W -f ou.ldif
+sudo cp ou.ldif grp.ldif
+sudo nano grp.ldif
+dn: cn=informatica,ou=informatica,dc=micentro,dc=edu
+objectClass: top
+objectClass: posixGroup
+gidNumber: 10000
+cn: informatica
+sudo ldapadd -x -D cn=admin,dc=micentro,dc=edu -W -f grp.ldif
+sudo cp grp.ldif usr.ldif
+sudo nano usr.ldif
+dn:uid=usuario1,ou=informatica,dc=micentro,dc=edu
+objectClass: top
+objectClass: posixAccount
+objectClass: inetOrgPerson
+objectClass: person
+cn: usuario1
+uid: usuario1
+ou: informatica
+uidNumber: 2000
+gidNumber: 10000
+homeDirectory: /home/usuario1
+loginShell: /bin/bash
+userPassword: Martinez,23
+sn: Usuario
+mail: usuario@micentro.edu
+givenName: usuario1
+sudo ldapadd -x -D cn=admin,dc=micentro,dc=edu -W -f usr.ldif
+sudo cp usr.ldif cambios.ldif
+dn: uid=usuario1,ou=informatica,dc=micentro,dc=edu
+changetype: modify
+replace: mail
+mail:nuevousu@micentro.edu
+sudo ldapmodify -x -D cn=admin,dc=micentro,dc=edu -W -f cambios.ldif
+PARA BORRAR: ldapdelete -x -W -D ‘cn=admin,dc=micentro,dc=edu’ “uid=usuario1,ou=informatica,dc=micentro,dc=edu”
+Nos vamos al CLIENTE:
+sudo apt-get install libnss-ldap libpam-ldap ldap-utils -y
+sudo nano /etc/nsswitch.conf
+añadimos “ldap” al final de las lineas passwd, group y shadow, dejando un espacio.
+sudo getent passwd
+sudo nano /etc/pam.d/common-session
+session optional 	pam_mkhomedir.so skel=/etc/skel umask= 077(al final del archivo)
+ldapsearch -x -H ldap://193.168.4.220 -b “dc=micentro,dc=local”
+sudo su - usuario1
+En una nueva terminal: sudo apt install nslcd
+Reiniciamos el sistema, y una vez hecho, iniciamos sesion de forma gráfica.
+
+
+tar cvf archivo.tar /archivo/mayo/*
+scp file.txt remote_username@10.10.0.2:/remote/directory
